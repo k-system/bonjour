@@ -177,31 +177,55 @@ func newServer(iface *net.Interface) (*Server, error) {
 	}
 
 	// Join multicast groups to receive announcements
-	p1 := ipv4.NewPacketConn(ipv4conn)
-	p2 := ipv6.NewPacketConn(ipv6conn)
+
 	if iface != nil {
-		if err := p1.JoinGroup(iface, &net.UDPAddr{IP: mdnsGroupIPv4}); err != nil {
-			return nil, err
+		success := false
+		if ipv4conn != nil {
+			p1 := ipv4.NewPacketConn(ipv4conn)
+			if err := p1.JoinGroup(iface, &net.UDPAddr{IP: mdnsGroupIPv4}); err != nil {
+				return nil, err
+			}
+			success = true
 		}
-		if err := p2.JoinGroup(iface, &net.UDPAddr{IP: mdnsGroupIPv6}); err != nil {
-			return nil, err
+		if ipv4conn != nil {
+			p2 := ipv6.NewPacketConn(ipv6conn)
+			if err := p2.JoinGroup(iface, &net.UDPAddr{IP: mdnsGroupIPv6}); err != nil {
+				return nil, err
+			}
+			success = true
+		}
+		if !success {
+			return nil, fmt.Errorf("can't join on any interface")
 		}
 	} else {
 		ifaces, err := net.Interfaces()
 		if err != nil {
 			return nil, err
 		}
-		errCount1, errCount2 := 0, 0
+		success := false
+		var p1, p2 interface {
+			JoinGroup(ifi *net.Interface, group net.Addr) error
+		}
+		if ipv4conn != nil {
+			p1 = ipv4.NewPacketConn(ipv4conn)
+		}
+		if ipv6conn != nil {
+			p2 = ipv6.NewPacketConn(ipv6conn)
+		}
 		for _, iface := range ifaces {
-			if err := p1.JoinGroup(&iface, &net.UDPAddr{IP: mdnsGroupIPv4}); err != nil {
-				errCount1++
+			if p1 != nil {
+				if err := p1.JoinGroup(&iface, &net.UDPAddr{IP: mdnsGroupIPv4}); err == nil {
+					success = true
+				}
 			}
-			if err := p2.JoinGroup(&iface, &net.UDPAddr{IP: mdnsGroupIPv6}); err != nil {
-				errCount2++
+			if p2 != nil {
+				if err := p2.JoinGroup(&iface, &net.UDPAddr{IP: mdnsGroupIPv6}); err == nil {
+					success = true
+				}
 			}
 		}
-		if len(ifaces) == errCount1 && len(ifaces) == errCount2 {
-			return nil, fmt.Errorf("Failed to join multicast group on all interfaces!")
+		if !success {
+			return nil, fmt.Errorf("Failed to join multicast group on any interface")
 		}
 	}
 
@@ -604,9 +628,15 @@ func (s *Server) unicastResponse(resp *dns.Msg, from net.Addr) error {
 	}
 	addr := from.(*net.UDPAddr)
 	if addr.IP.To4() != nil {
+		if s.ipv4conn == nil {
+			return fmt.Errorf("ipv4 connection is nil")
+		}
 		_, err = s.ipv4conn.WriteToUDP(buf, addr)
 		return err
 	} else {
+		if s.ipv6conn == nil {
+			return fmt.Errorf("ipv6 connection is nil")
+		}
 		_, err = s.ipv6conn.WriteToUDP(buf, addr)
 		return err
 	}
